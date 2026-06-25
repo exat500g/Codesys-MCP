@@ -25,7 +25,7 @@ try:
             decl_obj = target_object.textual_declaration
             if decl_obj and hasattr(decl_obj, 'replace'):
                 try:
-                    decl_obj.replace(DECLARATION_CONTENT)
+                    decl_obj.replace(_to_unicode(DECLARATION_CONTENT))
                     declaration_updated = True
                 except Exception as decl_err:
                     _safe_print("set_pou_code: declaration set error:", repr(decl_err))
@@ -43,7 +43,7 @@ try:
             impl_obj = target_object.textual_implementation
             if impl_obj and hasattr(impl_obj, 'replace'):
                 try:
-                    impl_obj.replace(IMPLEMENTATION_CONTENT)
+                    impl_obj.replace(_to_unicode(IMPLEMENTATION_CONTENT))
                     implementation_updated = True
                 except Exception as impl_err:
                      _safe_print("set_pou_code: implementation set error:", repr(impl_err))
