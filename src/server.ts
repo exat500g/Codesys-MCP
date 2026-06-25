@@ -889,9 +889,61 @@ export async function startMcpServer(config: ServerConfig): Promise<void> {
     }
   );
 
-  s.tool(
-    'search_code',
-    'Regex (or literal substring) search across every POU/Method/Property/DUT/GVL textual body. Returns file:line:col hits. Graphical bodies with no textual_implementation are skipped.',
+	  s.tool(
+	    'get_pou_code',
+	    'Reads the declaration and implementation code of a single POU / DUT / GVL / Method / Property identified by its full path. Returns structured output with declaration and implementation sections separately. Use this instead of get_all_pou_code when you need just one object.',
+	    {
+	      projectFilePath: z.string().describe("Path to the project file."),
+	      pouPath: z.string().min(1).describe("Full relative path to the target object (e.g., 'Application/MyPOU', 'Application/MyFB/MyMethod')."),
+	    },
+	    async (args: { projectFilePath: string; pouPath: string }) => {
+	      const escProjPath = resolvePath(args.projectFilePath, workspaceDir);
+	      const sanPouPath = sanitizePouPath(args.pouPath);
+	      const script = scriptManager.prepareScriptWithHelpers(
+	        'get_pou_code',
+	        { PROJECT_FILE_PATH: escProjPath, POU_FULL_PATH: sanPouPath },
+	        ['_text_utils', 'require_project_open', 'find_object_by_path']
+	      );
+	      const result = await executor.executeScript(script);
+
+	      let codeText = `Error retrieving code.\n\n${result.output}`;
+	      let isError = !result.success;
+
+	      if (result.success && result.output.includes('SCRIPT_SUCCESS')) {
+	        const declStart = '### POU DECLARATION START ###';
+	        const declEnd = '### POU DECLARATION END ###';
+	        const implStart = '### POU IMPLEMENTATION START ###';
+	        const implEnd = '### POU IMPLEMENTATION END ###';
+
+	        let declaration = '/* Declaration not found */';
+	        let implementation = '/* Implementation not found */';
+
+	        const ds = result.output.indexOf(declStart);
+	        const de = result.output.indexOf(declEnd);
+	        if (ds !== -1 && de !== -1 && ds < de) {
+	          declaration = result.output.substring(ds + declStart.length, de).replace(/\\n/g, '\n').trim();
+	        }
+
+	        const is_ = result.output.indexOf(implStart);
+	        const ie = result.output.indexOf(implEnd);
+	        if (is_ !== -1 && ie !== -1 && is_ < ie) {
+	          implementation = result.output.substring(is_ + implStart.length, ie).replace(/\\n/g, '\n').trim();
+	        }
+
+	        codeText = `// ----- Declaration -----\n${declaration}\n\n// ----- Implementation -----\n${implementation}`;
+	        isError = false;
+	      }
+
+	      return {
+	        content: [{ type: 'text' as const, text: codeText }],
+	        isError,
+	      };
+	    }
+	  );
+
+	  s.tool(
+	    'search_code',
+	    'Regex (or literal substring) search across every POU/Method/Property/DUT/GVL textual body. Returns file:line:col hits. Graphical bodies with no textual_implementation are skipped.',
     {
       projectFilePath: z.string().describe("Path to the project file."),
       pattern: z.string().min(1).describe("Pattern to search for. Treated as a regex unless regex=false."),

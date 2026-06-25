@@ -79,8 +79,12 @@ export class CodesysLauncher implements ScriptExecutor {
             !parsed.python_version.includes(this.config.profileName)) {
           continue;
         }
-        // Liveness check.
-        try { process.kill(parsed.pid, 0); } catch { continue; }
+        // Liveness check. Only ESRCH (no such process) means truly dead.
+        // EPERM / EACCES means the process exists but we can't query it --
+        // that's still alive enough to adopt.
+        try { process.kill(parsed.pid, 0); } catch (err: unknown) {
+          if ((err as NodeJS.ErrnoException).code === 'ESRCH') continue;
+        }
         const mtime = fs.statSync(sigPath).mtimeMs;
         candidates.push({ dir, pid: parsed.pid, sig: sigPath, mtime });
       }
@@ -221,21 +225,23 @@ export class CodesysLauncher implements ScriptExecutor {
     const watcherPath = path.join(this.ipcDir, 'watcher.py');
     fs.writeFileSync(watcherPath, watcherContent, 'utf-8');
 
-    // Build CODESYS args. Pass argv directly (no shell) so this.process.pid
-    // is the real CODESYS PID rather than a wrapping cmd.exe shell PID.
-    // Node will quote args containing spaces correctly when shell is off.
-    const codesysArgs = [
-      `--profile=${this.config.profileName}`,
-      `--runscript=${watcherPath}`,
-    ];
     const codesysDir = path.dirname(this.config.codesysPath);
 
-    launcherLog.info(`Spawning: ${this.config.codesysPath} ${codesysArgs.join(' ')}`);
+    // Use `start` (ShellExecuteEx) so Windows shows UAC elevation prompt
+    // when the CODESYS executable requires admin. Build as a single command
+    // string with shell:true so cmd.exe parses quotes natively — passing
+    // quoted paths in an argv array with shell:false mangles nested quotes
+    // on Windows ("\"C:\Program...\" becomes broken).
+    const quotedExe = `"${this.config.codesysPath}"`;
+    const profileArg = `--profile="${this.config.profileName}"`;
+    const scriptArg = `--runscript="${watcherPath}"`;
+    const fullCommand = `start "" ${quotedExe} ${profileArg} ${scriptArg}`;
 
-    // Spawn CODESYS detached with UI visible
-    this.process = spawn(this.config.codesysPath, codesysArgs, {
+    launcherLog.info(`Spawning: ${fullCommand}`);
+
+    this.process = spawn(fullCommand, [], {
       detached: true,
-      shell: false,
+      shell: true,
       windowsHide: false,
       stdio: 'ignore',
       cwd: codesysDir,
@@ -244,12 +250,22 @@ export class CodesysLauncher implements ScriptExecutor {
     this.pid = this.process.pid ?? null;
     this.process.unref();
 
-    launcherLog.info(`CODESYS spawned with PID ${this.pid}`);
+    launcherLog.info(`CODESYS launcher spawned with PID ${this.pid} (shell PID for cmd.exe)`);
 
-    // Handle process exit
+    // Handle process errors
+    this.process.on('error', (err: NodeJS.ErrnoException) => {
+      launcherLog.error(`CODESYS spawn error: ${err.message} (code=${err.code})`);
+      this.lastError = `CODESYS spawn failed: ${err.message} (${err.code})`;
+      this.pid = null;
+      this.process = null;
+      this.setState('error');
+    });
+
+    // The shell (cmd.exe) exits quickly after launching CODESYS via start.
+    // Don't treat this as an error when we're still in 'launching' state.
     this.process.on('exit', (code) => {
-      launcherLog.warn(`CODESYS process exited with code ${code}`);
-      if (this.state !== 'stopping') {
+      launcherLog.info(`Launcher shell exited with code ${code} (state=${this.state})`);
+      if (this.state !== 'launching' && this.state !== 'stopping') {
         this.lastError = `CODESYS exited unexpectedly (code ${code})`;
         this.setState('error');
       }
@@ -261,6 +277,20 @@ export class CodesysLauncher implements ScriptExecutor {
     const readyStart = Date.now();
     while (Date.now() - readyStart < READY_TIMEOUT_MS) {
       if (await this.ipcClient.isReady()) {
+        // Read the real CODESYS PID from ready.signal (the watcher writes
+        // os.getpid() which is the CODESYS.exe PID). The shell PID we got
+        // from spawn() is cmd.exe, which exits before ready.signal arrives.
+        try {
+          const sigPath = path.join(this.ipcDir!, 'ready.signal');
+          const sigContent = fs.readFileSync(sigPath, 'utf-8');
+          const sig = JSON.parse(sigContent);
+          if (typeof sig.pid === 'number') {
+            this.pid = sig.pid;
+            launcherLog.info(`Real CODESYS PID from ready.signal: ${this.pid}`);
+          }
+        } catch (readErr) {
+          launcherLog.warn(`Could not read PID from ready.signal: ${readErr}`);
+        }
         this.setState('ready');
         this.startedAt = Date.now();
         launcherLog.info('CODESYS watcher is ready');
@@ -400,8 +430,13 @@ sys.exit(0)
     try {
       process.kill(this.pid, 0); // Signal 0 = test if process exists
       return true;
-    } catch {
-      return false;
+    } catch (err: unknown) {
+      // On Windows, process.kill(pid, 0) may throw EPERM even when the
+      // process is alive (e.g. GUI processes in a different session).
+      // Only ESRCH (process not found) means truly dead.
+      if ((err as NodeJS.ErrnoException).code === 'ESRCH') return false;
+      // EPERM, EACCES, or any other error -> process exists, assume alive.
+      return true;
     }
   }
 
