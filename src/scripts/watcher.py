@@ -112,9 +112,13 @@ try:
         def __init__(self):
             self._buffer = []
         def write(self, s):
-            self._buffer.append(str(s))
+            if isinstance(s, unicode):
+                self._buffer.append(s.encode('utf-8'))
+            else:
+                self._buffer.append(str(s))
         def writelines(self, lines):
-            self._buffer.extend([str(l) for l in lines])
+            for l in lines:
+                self.write(l)
         def flush(self):
             pass
         def getvalue(self):

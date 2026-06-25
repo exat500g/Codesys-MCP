@@ -26,11 +26,24 @@ def _to_unicode(s):
     (py_encode_basestring_ascii calls s.decode('utf-8') even on unicode),
     so callers must serialise with ensure_ascii=False AND ensure all
     string values are unicode (not raw bytes that fail to round-trip).
+
+    IronPython quirk: get_name() and template-interpolated strings may have
+    isinstance(s,unicode)==True yet contain UTF-8 bytes encoded as Latin-1
+    code points (all ord(c) < 256).  Detect this and decode properly.
     """
     if s is None:
         return u""
     if isinstance(s, unicode):
-        return s
+        # IronPython may report .NET System.String as 'unicode' when it's
+        # really UTF-8 bytes in Latin-1 disguise (all ords < 256).
+        for c in s:
+            if ord(c) > 255:
+                return s  # genuine wide-char string, use as-is
+        # All chars in Latin-1 range -- re-interpret as UTF-8 bytes.
+        try:
+            return s.encode('latin-1').decode('utf-8')
+        except Exception:
+            return s
     try:
         return s.decode('utf-8')
     except UnicodeDecodeError:

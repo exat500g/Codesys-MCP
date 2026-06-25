@@ -12,7 +12,7 @@ def clean_path(path_str):
     return path_str.strip('"\'')
 
 def ensure_project_open(target_project_path):
-    path_to_use = clean_path(target_project_path)
+    path_to_use = _to_unicode(clean_path(target_project_path))
     normalized_target_path = os.path.normcase(os.path.abspath(path_to_use))
 
     # Track the most recent open() error so the final RuntimeError can include
@@ -54,7 +54,7 @@ def ensure_project_open(target_project_path):
                 update_mode = script_engine.VersionUpdateFlags.NoUpdates | script_engine.VersionUpdateFlags.SilentMode
 
                 try:
-                     opened_project = script_engine.projects.open(target_project_path, update_flags=update_mode)
+                     opened_project = script_engine.projects.open(_to_unicode(target_project_path), update_flags=update_mode)
 
                      if not opened_project:
                          print("ERROR: projects.open returned None for %s on attempt %d" % (target_project_path, attempt + 1))

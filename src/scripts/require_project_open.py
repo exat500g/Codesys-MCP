@@ -13,7 +13,7 @@ def require_project_open(target_project_path):
     Raises RuntimeError with a clear message when no project is open or
     when a different project is currently primary.
     """
-    cleaned = target_project_path.strip('"\'')
+    cleaned = _to_unicode(target_project_path.strip('"\''))
     normalized = os.path.normcase(os.path.abspath(cleaned))
 
     try:
