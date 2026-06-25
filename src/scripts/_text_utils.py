@@ -1,5 +1,21 @@
+# -*- coding: utf-8 -*-
 # Shared text-encoding helpers for IronPython 2.7 inside CODESYS.
 # Prepended to other scripts via ScriptManager.prepareScriptWithHelpers.
+
+import sys
+
+
+def _safe_print(*args):
+    """Print to stderr (safe unicode channel) without crashing on non-ASCII.
+    IronPython 2.7 print() tries to encode unicode via ASCII and crashes.
+    This helper encodes each arg to utf-8 bytes before writing.
+    """
+    out = u" ".join(_to_unicode(a) for a in args)
+    try:
+        sys.stderr.write(out.encode('utf-8') + "\n")
+        sys.stderr.flush()
+    except Exception:
+        pass
 
 def _to_unicode(s):
     """Coerce any byte/str/unicode value to unicode, defensively.

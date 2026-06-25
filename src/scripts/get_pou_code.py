@@ -25,17 +25,17 @@ def _emit_text(s):
             sys.stdout.write(str(s))
 
 try:
-    print("DEBUG: Getting code: POU_FULL_PATH='%s', Project='%s'" % (POU_FULL_PATH, PROJECT_FILE_PATH))
+    _safe_print("Getting code:", POU_FULL_PATH)
     # Resource read - refuse to silently switch projects.
     primary_project = require_project_open(PROJECT_FILE_PATH)
     if not POU_FULL_PATH: raise ValueError("POU full path empty.")
 
     # Find the target POU/Method/Property object
     target_object = find_object_by_path_robust(primary_project, POU_FULL_PATH, "target object")
-    if not target_object: raise ValueError("Target object not found using path: %s" % POU_FULL_PATH)
+    if not target_object: raise ValueError("not found: " + POU_FULL_PATH.encode('utf-8'))
 
     target_name = getattr(target_object, 'get_name', lambda: POU_FULL_PATH)()
-    print("DEBUG: Found target object: %s" % target_name)
+    _safe_print("Found target:", target_name)
 
     declaration_code = u""; implementation_code = u""
 
@@ -45,14 +45,13 @@ try:
         if decl_obj and hasattr(decl_obj, 'text'):
             try:
                 declaration_code = _to_unicode(decl_obj.text) if decl_obj.text else u""
-                print("DEBUG: Got declaration text.")
             except Exception as decl_read_err:
-                print("ERROR: Failed to read declaration text: %s" % decl_read_err)
-                declaration_code = u"/* ERROR reading declaration: %s */" % decl_read_err
+                _safe_print("ERROR reading declaration:", repr(decl_read_err))
+                declaration_code = u"/* ERROR reading declaration */" 
         else:
-            print("WARN: textual_declaration exists but is None or has no 'text' attribute.")
+            pass
     else:
-        print("WARN: No textual_declaration attribute.")
+        pass
 
     # --- Get Implementation Part ---
     if hasattr(target_object, 'textual_implementation'):
@@ -60,17 +59,15 @@ try:
         if impl_obj and hasattr(impl_obj, 'text'):
             try:
                 implementation_code = _to_unicode(impl_obj.text) if impl_obj.text else u""
-                print("DEBUG: Got implementation text.")
             except Exception as impl_read_err:
-                print("ERROR: Failed to read implementation text: %s" % impl_read_err)
-                implementation_code = u"/* ERROR reading implementation: %s */" % impl_read_err
+                _safe_print("ERROR reading implementation:", repr(impl_read_err))
+                implementation_code = u"/* ERROR reading implementation */"
         else:
-            print("WARN: textual_implementation exists but is None or has no 'text' attribute.")
+            pass
     else:
-        print("WARN: No textual_implementation attribute.")
+        pass
 
 
-    print("Code retrieved for: %s" % target_name)
     sys.stdout.write("\n" + DECL_START_MARKER + "\n")
     _emit_text(declaration_code)
     sys.stdout.write("\n" + DECL_END_MARKER + "\n\n")
@@ -79,11 +76,9 @@ try:
     sys.stdout.write("\n" + IMPL_END_MARKER + "\n\n")
     sys.stdout.flush()
 
-    print("SCRIPT_SUCCESS: Code retrieved.")
+    sys.stdout.write("SCRIPT_SUCCESS\n")
     sys.exit(0)
 except Exception as e:
-    detailed_error = traceback.format_exc()
-    error_message = "Error getting code for object '%s' in project '%s': %s\\n%s" % (POU_FULL_PATH, PROJECT_FILE_PATH, e, detailed_error)
-    print(error_message)
-    print("SCRIPT_ERROR: %s" % error_message)
+    _safe_print("get_pou_code error:", repr(e))
+    _safe_print("SCRIPT_ERROR: see traceback")
     sys.exit(1)
