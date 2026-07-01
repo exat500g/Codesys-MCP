@@ -23,6 +23,12 @@ const READY_TIMEOUT_MS = Number(process.env.CODESYS_MCP_READY_TIMEOUT_MS) > 0
 const READY_POLL_MS = 500;
 const SHUTDOWN_WAIT_MS = 5_000;
 const HEALTH_CHECK_INTERVAL_MS = 5_000;
+// Stale session threshold: if ready.signal is older than this, refuse to
+// adopt even if the PID is alive (the PID may have been recycled by Windows
+// to a completely different process after a reboot).
+const STALE_SESSION_THRESHOLD_MS = 30_000;
+// Sessions older than this get cleaned up on launcher start (disk space).
+const SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 export class CodesysLauncher implements ScriptExecutor {
   private config: LauncherConfig;
@@ -59,6 +65,20 @@ export class CodesysLauncher implements ScriptExecutor {
     try {
       const sessionsRoot = path.join(os.tmpdir(), SESSION_DIR_PREFIX);
       if (!fs.existsSync(sessionsRoot)) return false;
+      // Janitor: remove session dirs older than SESSION_MAX_AGE_MS.
+      const allEntries = fs.readdirSync(sessionsRoot, { withFileTypes: true });
+      for (const ent of allEntries) {
+        if (!ent.isDirectory()) continue;
+        const dir = path.join(sessionsRoot, ent.name);
+        try {
+          const stat = fs.statSync(dir);
+          if (Date.now() - stat.mtimeMs > SESSION_MAX_AGE_MS) {
+            launcherLog.info(`Cleaning up old session: ${ent.name}`);
+            fs.rmSync(dir, { recursive: true, force: true });
+          }
+        } catch { /* skip if we can't stat/remove */ }
+      }
+      // Re-scan remaining dirs for adoption candidates.
       const entries = fs.readdirSync(sessionsRoot, { withFileTypes: true });
       const candidates: Array<{ dir: string; pid: number; sig: string; mtime: number }> = [];
       for (const ent of entries) {
@@ -85,7 +105,16 @@ export class CodesysLauncher implements ScriptExecutor {
         try { process.kill(parsed.pid, 0); } catch (err: unknown) {
           if ((err as NodeJS.ErrnoException).code === 'ESRCH') continue;
         }
+        // Timestamp freshness check. On Windows, a PID from a previous boot
+        // may have been recycled to a completely different process, making
+        // the kill(0) check above pass for a non-CODESYS process.  Reject
+        // sessions whose ready.signal is older than STALE_SESSION_THRESHOLD.
         const mtime = fs.statSync(sigPath).mtimeMs;
+        const age = Date.now() - mtime;
+        if (age > STALE_SESSION_THRESHOLD_MS) {
+          launcherLog.info(`Skipping stale session ${ent.name}: ready.signal age ${age}ms > ${STALE_SESSION_THRESHOLD_MS}ms`);
+          continue;
+        }
         candidates.push({ dir, pid: parsed.pid, sig: sigPath, mtime });
       }
       if (candidates.length === 0) return false;
